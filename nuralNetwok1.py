@@ -10,6 +10,8 @@ from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, TensorB
 from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score, roc_curve
 import tensorflow as tf
 
+tf.config.run_functions_eagerly(True)
+tf.data.experimental.enable_debug_mode()
 SEED = 1337
 np.random.seed(SEED)
 tf.random.set_seed(SEED)
@@ -118,7 +120,11 @@ class LossAndErrorPrintingCallback(keras.callbacks.Callback):
         val_loss = logs.get("val_loss")
         acc = logs.get("accuracy")
         val_acc = logs.get("val_accuracy")
-        lr = logs.get("lr", self.model.optimizer.learning_rate.numpy())
+        
+        try:
+            lr = logs.get("lr", float(self.model.optimizer.learning_rate.numpy()))
+        except:
+            lr = logs.get("lr", 1e-3)
         
         msg = f"Epoch {epoch + 1:3d}: loss={loss:.4f}"
         if acc is not None:
