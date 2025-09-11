@@ -10,8 +10,7 @@ from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, TensorB
 from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score, roc_curve
 import tensorflow as tf
 
-tf.config.run_functions_eagerly(True)
-tf.data.experimental.enable_debug_mode()
+tf.config.run_functions_eagerly(False)
 SEED = 1337
 np.random.seed(SEED)
 tf.random.set_seed(SEED)
@@ -46,27 +45,25 @@ class EnhancedTensorBoardCallback(keras.callbacks.Callback):
             for metric_name, metric_value in logs.items():
                 tf.summary.scalar(f'metrics/{metric_name}', metric_value, step=epoch)
             
-            predictions = self.model.predict(self.x_val, verbose=0)
-            pred_classes = (predictions > 0.5).astype(int).flatten()
-            true_classes = self.y_val.flatten()
-            
-            try:
-                auc_score = roc_auc_score(true_classes, predictions.flatten())
-                tf.summary.scalar('test_metrics/auc', auc_score, step=epoch)
-            except:
-                pass
-            
-            if epoch % 5 == 0:
+            if epoch % 10 == 0:
+                predictions = self.model.predict(self.x_val, verbose=0)
+                pred_classes = (predictions > 0.5).astype(int).flatten()
+                true_classes = self.y_val.flatten()
+                
+                try:
+                    auc_score = roc_auc_score(true_classes, predictions.flatten())
+                    tf.summary.scalar('test_metrics/auc', auc_score, step=epoch)
+                except:
+                    pass
+                
                 cm = confusion_matrix(true_classes, pred_classes)
                 
-                fig, ax = plt.subplots(figsize=(6, 5))
-                sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax)
+                fig, ax = plt.subplots(figsize=(4, 3))
+                sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax, cbar=False)
                 ax.set_title(f'{self.model_name} - Epoch {epoch}')
-                ax.set_xlabel('Predicted')
-                ax.set_ylabel('Actual')
                 
                 img_buffer = io.BytesIO()
-                plt.savefig(img_buffer, format='png', bbox_inches='tight', dpi=100)
+                plt.savefig(img_buffer, format='png', bbox_inches='tight', dpi=50)
                 img_buffer.seek(0)
                 
                 image = tf.image.decode_png(img_buffer.getvalue(), channels=4)
@@ -74,40 +71,12 @@ class EnhancedTensorBoardCallback(keras.callbacks.Callback):
                 tf.summary.image("confusion_matrix", image, step=epoch)
                 plt.close()
             
-            if epoch % 10 == 0:
-                try:
-                    fpr, tpr, _ = roc_curve(true_classes, predictions.flatten())
-                    
-                    fig, ax = plt.subplots(figsize=(6, 5))
-                    ax.plot(fpr, tpr, label=f'ROC Curve (AUC = {auc_score:.3f})')
-                    ax.plot([0, 1], [0, 1], 'k--', label='Random')
-                    ax.set_xlabel('False Positive Rate')
-                    ax.set_ylabel('True Positive Rate')
-                    ax.set_title(f'{self.model_name} - ROC Curve (Epoch {epoch})')
-                    ax.legend()
-                    ax.grid(True, alpha=0.3)
-                    
-                    img_buffer = io.BytesIO()
-                    plt.savefig(img_buffer, format='png', bbox_inches='tight', dpi=100)
-                    img_buffer.seek(0)
-                    
-                    image = tf.image.decode_png(img_buffer.getvalue(), channels=4)
-                    image = tf.expand_dims(image, 0)
-                    tf.summary.image("roc_curve", image, step=epoch)
-                    plt.close()
-                except:
-                    pass
-            
-            for i, layer in enumerate(self.model.layers):
-                if hasattr(layer, 'kernel'):
-                    weights = layer.get_weights()[0]
-                    tf.summary.histogram(f'weights/layer_{i}_{layer.name}', weights, step=epoch)
-                    tf.summary.scalar(f'weight_stats/layer_{i}_mean', np.mean(weights), step=epoch)
-                    tf.summary.scalar(f'weight_stats/layer_{i}_std', np.std(weights), step=epoch)
-                    
-                    if len(layer.get_weights()) > 1:
-                        biases = layer.get_weights()[1]
-                        tf.summary.histogram(f'biases/layer_{i}_{layer.name}', biases, step=epoch)
+            if epoch % 20 == 0:
+                for i, layer in enumerate(self.model.layers):
+                    if hasattr(layer, 'kernel'):
+                        weights = layer.get_weights()[0]
+                        tf.summary.scalar(f'weight_stats/layer_{i}_mean', np.mean(weights), step=epoch)
+                        tf.summary.scalar(f'weight_stats/layer_{i}_std', np.std(weights), step=epoch)
             
             self.writer.flush()
 
@@ -252,11 +221,11 @@ def create_model(input_dim, architecture='deep', regularization=0.01, dropout_ra
 
 def get_optimizers():
     return {
-        'Adam': keras.optimizers.Adam(learning_rate=1e-3),
-        'AdamW': keras.optimizers.AdamW(learning_rate=1e-3, weight_decay=0.01),
-        'RMSprop': keras.optimizers.RMSprop(learning_rate=1e-3),
-        'SGD_Momentum': keras.optimizers.SGD(learning_rate=1e-2, momentum=0.9, nesterov=True),
-        'Nadam': keras.optimizers.Nadam(learning_rate=1e-3)
+        'Adam': lambda: keras.optimizers.Adam(learning_rate=1e-3),
+        'AdamW': lambda: keras.optimizers.AdamW(learning_rate=1e-3, weight_decay=0.01),
+        'RMSprop': lambda: keras.optimizers.RMSprop(learning_rate=1e-3),
+        'SGD_Momentum': lambda: keras.optimizers.SGD(learning_rate=1e-2, momentum=0.9, nesterov=True),
+        'Nadam': lambda: keras.optimizers.Nadam(learning_rate=1e-3)
     }
 
 def create_callbacks(model_name, optimizer_name, x_val, y_val):
@@ -265,14 +234,14 @@ def create_callbacks(model_name, optimizer_name, x_val, y_val):
     
     callbacks = [
         LossAndErrorPrintingCallback(),
-        EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True, verbose=1),
-        ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-6, verbose=1),
-        OverfittingEarlyStopping(patience=3, gap_loss=0.02, gap_acc=0.02, restore_best_weights=True),
+        EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=1),
+        ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=3, min_lr=1e-6, verbose=1),
+        OverfittingEarlyStopping(patience=2, gap_loss=0.03, gap_acc=0.03, restore_best_weights=True),
         TensorBoard(
             log_dir=log_dir, 
-            histogram_freq=5, 
-            write_graph=True, 
-            write_images=True,
+            histogram_freq=0, 
+            write_graph=False, 
+            write_images=False,
             update_freq='epoch'
         ),
         EnhancedTensorBoardCallback(log_dir, x_val, y_val, f"{model_name}_{optimizer_name}")
@@ -311,7 +280,7 @@ def evaluate_model(model, x_test, y_test, model_name="Model"):
 
 def run_experiments():
     print("Creating synthetic dataset...")
-    X, y, probs = make_dataset(n=6000, d=15, noise=0.4, imbalance_ratio=0.6)
+    X, y, probs = make_dataset(n=4000, d=12, noise=0.4, imbalance_ratio=0.6)
     
     idx = rng.permutation(len(X))
     train_sz = int(0.7 * len(X))
@@ -340,12 +309,12 @@ def run_experiments():
         
         arch_results = {}
         
-        for opt_name, optimizer in optimizers.items():
+        for opt_name, optimizer_factory in optimizers.items():
             print(f"\nTraining with {opt_name} optimizer...")
             
             model = create_model(x_train.shape[1], architecture=arch)
             model.compile(
-                optimizer=optimizer,
+                optimizer=optimizer_factory(),
                 loss="binary_crossentropy",
                 metrics=["accuracy"],
             )
@@ -355,8 +324,8 @@ def run_experiments():
             
             history = model.fit(
                 x_train, y_train,
-                batch_size=64,
-                epochs=100,
+                batch_size=128,
+                epochs=50,
                 verbose=0,
                 validation_data=(x_val, y_val),
                 callbacks=callbacks,
